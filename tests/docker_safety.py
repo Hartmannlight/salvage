@@ -134,7 +134,9 @@ ENTRYPOINT ["sh", "-c", "case $MODE in slow) sleep 90;; fail) exit 7;; *) if tou
     d('stop','--time','20',daemon,timeout=30)
     daemon_state=json.loads(d('inspect',daemon).stdout)[0]['State']
     log=d('logs',daemon).stdout
-    assert daemon_state['ExitCode']==0,daemon_state
+    # A JVM handling SIGTERM may retain the conventional 128 + SIGTERM status.
+    assert daemon_state['ExitCode'] in (0,143),daemon_state
+    assert 'exiting salvage service thread' in log,log
     assert running(a) and running(b),log
     assert not d('ps','-aq','--filter','label=salvage.entity=crane').stdout.strip(),log
     print('PASS multi-container rollback and graceful shutdown with an active crane',flush=True)
