@@ -38,6 +38,7 @@ public record SalvageCrane(String name, String image, boolean pullOnRun, Map<Str
 		try {
 			maxConcurrent = Integer.parseInt(labels.get(prefix + LABEL_SALVAGE_MAX_CONCURRENT));
 		} catch (NumberFormatException ignore) {}
+        if (maxConcurrent < 1) throw new IllegalArgumentException("maxConcurrent must be positive");
 		return new SalvageCrane(name, image, pullOnRun, env, mounts, maxConcurrent);
 	}
 }

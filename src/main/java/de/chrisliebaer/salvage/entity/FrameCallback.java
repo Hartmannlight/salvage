@@ -16,7 +16,7 @@ public class FrameCallback implements ResultCallback<Frame> {
 	private final Consumer<Frame> consumer;
 	private final CountDownLatch countDownLatch = new CountDownLatch(1);
 	
-	private Closeable closeable;
+	private volatile Closeable closeable;
 	private volatile Throwable error;
 	
 	public FrameCallback(Consumer<Frame> consumer) {
@@ -46,7 +46,7 @@ public class FrameCallback implements ResultCallback<Frame> {
 	
 	@Override
 	public void close() throws IOException {
-		closeable.close();
+		if (closeable != null) closeable.close();
 	}
 	
 	public void join() throws Throwable {

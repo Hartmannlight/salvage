@@ -1,11 +1,11 @@
-# Work in progress!
+# Salvage — backup safety fork
 
-Salvage is currently being used in production, and no major issues have been reported except for those listed in the open issues section.
-Please note that some configurations may not have been fully tested yet and there might be undiscovered bugs that could potentially cause catastrophic failures.
+This fork includes fixes for backup failure reporting, container rollback and graceful shutdown.
+Docker images at `ghcr.io/hartmannlight/salvage:master` support `linux/amd64` and `linux/arm64`.
+See [CHANGELOG.md](CHANGELOG.md) for migration and regression-test details.
 
-It's worth noting that Salvage does not issue any volume deletion commands and will mount all backup volumes as read-only, so data loss is extremely unlikely.
-
-Additionally, there are currently no other crane implementations available other than the one used for the author's own infrastructure, which can be found in the "Crane" section below.
+Source volumes are mounted read-only. Repository retention still deletes backup history by design;
+use a suitable retention policy and verify restores before relying on a backup.
 
 <p align="center">
 	<img src="https://raw.githubusercontent.com/chrisliebaer/salvage/master/logo.png" width="50%" height="50%" alt="salvage logo"/>
@@ -97,7 +97,7 @@ An example excerpt of a salvage container with a crane volume attached might loo
 ```yaml
 services:
   salvage:
-    image: "ghcr.io/chrisliebaer/salvage:master"
+    image: "ghcr.io/hartmannlight/salvage:master"
     environment:
       - "MACHINE=my-machine"
       # [ ... ]

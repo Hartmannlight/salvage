@@ -90,6 +90,7 @@ public record SalvageTide(String name, SalvageCrane crane, GroupingMode grouping
 			throw new IllegalArgumentException("tried to construct tide '" + name + "', but maxConcurrent is not a number");
 		}
 		
+        if (maxConcurrent < 1) throw new IllegalArgumentException("maxConcurrent must be positive");
 		ReportingUrlStore reportingUrlStore;
 		try {
 			reportingUrlStore = ReportingUrlStore.fromEnv(labels, prefix + ".report");
