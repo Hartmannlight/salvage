@@ -162,8 +162,7 @@ public class StateTransaction implements AutoCloseable {
 	
 	/**
 	 * This class is used to store the dynamic restore function for a container, depending on the action that was performed and which state it was in before.
-	 *
-			 */
+	 */
 	private static final class AffectedContainer {
 		private RestoreFunction restoreFn;
 		private final boolean preCommandRun;

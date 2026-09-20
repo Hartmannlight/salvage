@@ -77,8 +77,9 @@ class SafetyTest {
 
     @Test void lostStopResponseStillRestoresTheApplication() throws Exception {
         var docker=mock(DockerClient.class); var a=fixture(docker,"a");
+        var stop=docker.stopContainerCmd("a");
         doAnswer(i -> {a.running().set(false);throw new IllegalStateException("lost response");})
-            .when(docker.stopContainerCmd("a")).exec();
+            .when(stop).exec();
         var tx=new StateTransaction(docker);
         assertThrows(IllegalStateException.class,() -> tx.prepare(a.container()));
         assertFalse(a.running().get());

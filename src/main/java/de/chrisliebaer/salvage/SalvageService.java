@@ -281,7 +281,6 @@ public class SalvageService extends AbstractService {
 					try (var transaction = new StateTransaction(docker)) {
 						backupGroup(tide, operation, group, transaction);
 						
-						// TODO if interrupted abort tide, probably should cancel vessel as well
 					}
 					
 					log.debug("finish backup of group no. {} with {} containers and {} volumes", i, group.containers().size(), group.volumes().size());
