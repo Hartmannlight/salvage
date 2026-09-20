@@ -81,41 +81,45 @@ public class SalvageVessel {
 				.withLabels(Map.of(SalvageService.SALVAGE_ENTITY_LABEL, "crane"))
 				.withStopTimeout(BACKUP_SHUTDOWN_GRACE_TIMEOUT)
 				.withHostConfig(HostConfig.newHostConfig()
-						// TODO: waiting for container to exit is broken and subject to a race condition, remove autoremove and simply remove container by hand
-						.withAutoRemove(true)
+						// Keep exit status available until it has been observed.
+						.withAutoRemove(false)
 						.withBinds(prepareBinds()))
 				.exec();
 		log.info("created container '{}' for crane '{}' to backup volume '{}'", container.getId(), crane.name(), volume.name());
 		
+		Throwable failure = null;
 		try {
 			startBackupContainer(container);
 		} catch (Throwable e) {
-			
-			try {
-				// since we are using auto remove, docker will remove the container for us unless it has never been started
-				// todo can fail if container is already removed
-				var inspect = docker.inspectContainerCmd(container.getId()).exec();
-				if ("created".equalsIgnoreCase(inspect.getState().getStatus())) {
-					docker.removeContainerCmd(container.getId())
-							.withForce(true)
-							.withRemoveVolumes(true)
-							.exec();
-				}
-			} catch (NotFoundException ignore) {
-				// container was already removed, ignore
-			} catch (Throwable e2) {
-				e.addSuppressed(e2);
-				//noinspection ThrowInsideCatchBlockWhichIgnoresCaughtException
-				throw new RuntimeException("failed to remove container '" + container.getId() + "' in response to error during backup", e);
-			}
-			// if we succeeded to remove the container, we rethrow the original exception
-			log.debug("backup of '{}' failed but we still managed to remove crane container '{}'", volume.name(), container.getId());
-			
-			
+			failure = e;
 			throw e;
+		} finally {
+			// Docker's HTTP client rejects calls from an interrupted thread.
+			boolean interrupted = Thread.interrupted();
+			try {
+				try {
+					var state = docker.inspectContainerCmd(container.getId()).exec().getState();
+					if (Boolean.TRUE.equals(state.getRunning())) {
+						try {
+							docker.stopContainerCmd(container.getId()).withTimeout(5).exec();
+						} finally {
+							docker.removeContainerCmd(container.getId()).withForce(true).exec();
+						}
+					} else {
+						docker.removeContainerCmd(container.getId()).exec();
+					}
+				} catch (NotFoundException ignored) {
+					// Already removed by an external administrator.
+				}
+			} catch (Throwable cleanupError) {
+				if (failure != null) failure.addSuppressed(cleanupError);
+				else throw cleanupError;
+			} finally {
+				if (interrupted) Thread.currentThread().interrupt();
+			}
 		}
 	}
-	
+
 	private void startBackupContainer(CreateContainerResponse container) throws Throwable {
 		// upload metadata into container, so they will be backed up by the crane
 		byte[] metaTar = createMetaArchive(meta);
@@ -125,7 +129,7 @@ public class SalvageVessel {
 				.exec();
 		log.trace("uploaded meta data to container '{}': {}", container.getId(), meta);
 		
-		var frameCallback = docker.attachContainerCmd(container.getId())
+		try (var frameCallback = docker.attachContainerCmd(container.getId())
 				.withStdOut(true)
 				.withStdErr(true)
 				.withFollowStream(true)
@@ -133,16 +137,18 @@ public class SalvageVessel {
 					var line = new String(frame.getPayload(), StandardCharsets.UTF_8).trim();
 					volumeLog.log(line);
 					log.debug("[{}@{}] {}", volume.name(), crane.name(), line);
-				}));
+				}))) {
 		log.trace("starting backup container '{}' for volume '{}'", container.getId(), volume.name());
 		docker.startContainerCmd(container.getId()).exec();
-		var waitCallback = docker.waitContainerCmd(container.getId()).exec(new WaitContainerResultCallback());
+		try (var waitCallback = docker.waitContainerCmd(container.getId()).exec(new WaitContainerResultCallback())) {
 		
 		// docker-java eats interrupted exception, so use our own callback first (still doesn't fully address the problem)
 		frameCallback.join();
 		var statusCode = waitCallback.awaitStatusCode();
 		if (statusCode != 0) {
 			throw new RuntimeException("backup of volume '" + volume.name() + "' failed with exit code " + statusCode);
+		}
+		}
 		}
 	}
 	

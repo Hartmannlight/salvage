@@ -25,7 +25,7 @@ public sealed interface ExitCodeBehaviour permits ExitCodeBehaviour.Ignore, Exit
 		if ("ignore".equals(value)) {
 			return new Ignore();
 		}
-		if ("fail".equals(value)) {
+		if ("stop".equals(value) || "fail".equals(value)) {
 			return new FailIfNonZero();
 		}
 		return Custom.fromString(value);
@@ -130,7 +130,7 @@ public sealed interface ExitCodeBehaviour permits ExitCodeBehaviour.Ignore, Exit
 		
 		@Override
 		public boolean check(long exitCode) {
-			return ranges.stream().anyMatch(r -> r.contains(exitCode));
+			return ranges.stream().noneMatch(r -> r.contains(exitCode));
 		}
 	}
 }

@@ -57,10 +57,10 @@ dependencies {
 	implementation("com.google.guava:guava:33.5.0-jre")
 	implementation("org.apache.commons:commons-text:1.15.0")
 	
-	val log4j2 = "2.17.2"
+	val log4j2 = "2.25.3"
 	implementation("org.apache.logging.log4j:log4j-api:$log4j2")
 	implementation("org.apache.logging.log4j:log4j-core:$log4j2")
-	implementation("org.apache.logging.log4j:log4j-slf4j-impl:$log4j2")
+	implementation("org.apache.logging.log4j:log4j-slf4j2-impl:$log4j2")
 	
 	// for interacting with docker daemon
 	val docker = "3.7.0"
@@ -76,7 +76,13 @@ dependencies {
 	// for creating tar archive for uploading files to docker daemon
 	implementation("org.apache.commons:commons-compress:1.28.0")
 	implementation("com.google.code.gson:gson:2.13.2")
+	testImplementation(platform("org.junit:junit-bom:5.14.1"))
+	testImplementation("org.junit.jupiter:junit-jupiter")
+	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+	testImplementation("org.mockito:mockito-core:5.20.0")
 }
+
+tasks.test { useJUnitPlatform() }
 
 // set encoding for all compilation passes
 tasks.withType<JavaCompile> {

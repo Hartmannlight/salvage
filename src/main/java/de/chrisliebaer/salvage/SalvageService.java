@@ -281,7 +281,6 @@ public class SalvageService extends AbstractService {
 					try (var transaction = new StateTransaction(docker)) {
 						backupGroup(tide, operation, group, transaction);
 						
-						// TODO if interrupted abort tide, probably should cancel vessel as well
 					}
 					
 					log.debug("finish backup of group no. {} with {} containers and {} volumes", i, group.containers().size(), group.volumes().size());
@@ -336,48 +335,21 @@ public class SalvageService extends AbstractService {
 		// report for individual volumes is done in the volume log itself in order to have them closer to the actual time the volume was backed up
 	}
 	
-	private static void backupGroup(SalvageTide tide, BackupOperation operation, BackupGrouping.Group group, StateTransaction transaction) {
-		
-		var containers = group.containers();
-		
-		// if an error occurs during preparation, we can simply abort the whole backup
-		try {
-			for (var container : containers) {
-				ThreadContext.put("container", container.name());
-				log.debug("preparing container {} for backup", container.name());
-				transaction.prepare(container);
-			}
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new IllegalStateException("failed to establish pre backup state for tide '" + tide.name() + "'", e);
-		} catch (Throwable e) {
-			throw new IllegalStateException("failed to establish pre backup state for tide '" + tide.name() + "'", e);
-		} finally {
-			ThreadContext.remove("container");
-		}
-		
-		// errors during backup operation can not be recovered, we will continue with the backup and hope for the best
-		try {
-			operation.backupVolumes(tide.crane(), group.volumes());
-		} catch (Throwable e) {
-			log.error("encountered error during backup of tide '{}'", tide.name(), e);
-			Thread.currentThread().interrupt();
-		}
-		
-		// error during finish state on containers need to be ignored, since we might be able to recover some containers
-		for (var container : containers) {
+	private static void backupGroup(SalvageTide tide, BackupOperation operation, BackupGrouping.Group group,
+									StateTransaction transaction) throws InterruptedException {
+		// The enclosing transaction closes on every exit, including preparation failures.
+		// Do not swallow restore/worker failures: they must make the tide fail.
+		for (var container : group.containers()) {
 			try {
 				ThreadContext.put("container", container.name());
-				log.debug("restoring container {} to previous state", container.name());
-				transaction.restore(container);
-			} catch (Throwable e) {
-				log.warn("failed to restore post backup state for tide '{}' and container '{}'", tide.name(), container.name(), e);
+				transaction.prepare(container);
 			} finally {
 				ThreadContext.remove("container");
 			}
 		}
+		operation.backupVolumes(tide.crane(), group.volumes());
 	}
-	
+
 	private static DockerClient createDefaultClient() {
 		var config = DefaultDockerClientConfig.createDefaultConfigBuilder().build();
 		DockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
@@ -420,18 +392,17 @@ public class SalvageService extends AbstractService {
 			log.trace("container '{}' is mapping volumes to tide '{}' via labels: {}", container.getId(), tide.name(), volumeNames);
 			
 			var project = labels.get(COMPOSE_LABEL_PROJECT);
-			if (project == null) {
-				log.warn("container '{}' is not part of a project, only project containers can be used for volume mapping", container.getId());
-				continue;
-			}
-			
-			for (var volumeName : volumeNames) {
+
+			for (var rawVolumeName : volumeNames) {
+				var volumeName = rawVolumeName.trim();
+				if (volumeName.isEmpty()) throw new IllegalArgumentException("empty volume mapping");
 				InspectVolumeResponse volume;
 				if (volumeName.startsWith("g:")) {
-					// perform global lookup using raw volume name
+					// Global names do not require a Compose project.
 					var globalName = volumeName.substring(2);
 					volume = docker.inspectVolumeCmd(globalName).exec();
 				} else {
+					if (project == null) throw new IllegalArgumentException("volume '" + volumeName + "' needs a Compose project or the g: prefix");
 					log.trace("performing lookup volume '{}' in compose project '{}'", volumeName, project);
 					var volumes = docker.listVolumesCmd()
 							.withFilter("label", List.of(

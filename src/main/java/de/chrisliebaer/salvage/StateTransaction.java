@@ -7,6 +7,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.IdentityHashMap;
+import java.util.ArrayList;
 import java.util.Map;
 
 /**
@@ -35,17 +36,22 @@ public class StateTransaction implements AutoCloseable {
 		if (affectedContainers.isEmpty())
 			return;
 		
-		log.warn("found {} containers in backup state, assuming failure and rolling back container state", affectedContainers.size());
-		for (var entry : affectedContainers.entrySet()) {
-			var container = entry.getKey();
-			var state = entry.getValue();
-			log.debug("rolling back container {}", container.name());
-			try {
-				restore(container);
-			} catch (Throwable e) {
-				throw new IllegalStateException("failed to roll back container state for container " + container.name(), e);
+		boolean interrupted = Thread.interrupted();
+		var failure = new IllegalStateException("failed to restore one or more containers after backup");
+		try {
+			for (var container : new ArrayList<>(affectedContainers.keySet())) {
+				try {
+					restore(container);
+				} catch (Throwable e) {
+					failure.addSuppressed(new IllegalStateException("failed to restore " + container.name(), e));
+				} finally {
+					interrupted |= Thread.interrupted();
+				}
 			}
+		} finally {
+			if (interrupted) Thread.currentThread().interrupt();
 		}
+		if (failure.getSuppressed().length != 0) throw failure;
 	}
 	
 	public void prepare(SalvageContainer container) throws InterruptedException {
@@ -93,9 +99,9 @@ public class StateTransaction implements AutoCloseable {
 		}
 		
 		
-		RestoreFunction restoreFn = (d, c) -> {
-			// default: do nothing
-		};
+		var affected = new AffectedContainer((d, c) -> {}, preCommandRun);
+		// Track before the Docker mutation: the request may succeed even if its response fails.
+		affectedContainers.put(container, affected);
 		
 		// alter container state, if necessary
 		switch (container.action()) {
@@ -107,37 +113,40 @@ public class StateTransaction implements AutoCloseable {
 						throw new IllegalStateException("container '" + container.name() + "' is paused, cannot stop");
 					}
 					log.debug("stopping container {}", container.name());
-					docker.stopContainerCmd(container.id()).exec();
-					
-					restoreFn = (d, c) -> {
+					affected.restoreFn = (d, c) -> {
 						log.debug("starting container {}", c.name());
-						d.startContainerCmd(c.id()).exec();
+						if (!d.inspectContainerCmd(c.id()).exec().getState().getRunning())
+							d.startContainerCmd(c.id()).exec();
 					};
+					docker.stopContainerCmd(container.id()).exec();
 				}
 			}
 			case PAUSE -> {
 				// if container is running, we need to pause it (otherwise we don't need to do anything)
 				if (state.getRunning() && !state.getPaused()) {
 					log.debug("pausing container {}", container.name());
-					docker.pauseContainerCmd(container.id()).exec();
-					
-					restoreFn = (d, c) -> {
+					affected.restoreFn = (d, c) -> {
 						log.debug("unpausing container {}", c.name());
-						d.unpauseContainerCmd(c.id()).exec();
+						if (d.inspectContainerCmd(c.id()).exec().getState().getPaused())
+							d.unpauseContainerCmd(c.id()).exec();
 					};
+					docker.pauseContainerCmd(container.id()).exec();
 				}
 			}
 		}
 		
-		// add container to tracking list, so we can perform rollback if necessary
-		affectedContainers.put(container, new AffectedContainer(restoreFn, preCommandRun));
+
 	}
 	
 	public void restore(SalvageContainer container) throws Throwable {
-		var affected = affectedContainers.remove(container);
-		affected.restoreFn().run(docker, container);
+		var affected = affectedContainers.get(container);
+		if (affected == null) return;
+		if (!affected.stateRestored) {
+			affected.restoreFn.run(docker, container);
+			affected.stateRestored = true;
+		}
 		
-		if (affected.preCommandRun() && container.commandPost().isPresent()) {
+		if (affected.preCommandRun && container.commandPost().isPresent()) {
 			var command = container.commandPost().get();
 			log.debug("running post command '{}' on container {}", command, container.name());
 			var exitCode = command.run(docker, container);
@@ -148,15 +157,21 @@ public class StateTransaction implements AutoCloseable {
 				
 			}
 		}
+		affectedContainers.remove(container);
 	}
 	
 	/**
 	 * This class is used to store the dynamic restore function for a container, depending on the action that was performed and which state it was in before.
-	 *
-	 * @param restoreFn     the restore function.
-	 * @param preCommandRun whether the preperation command was run, meaning that we also need to run the post command.
 	 */
-	private record AffectedContainer(RestoreFunction restoreFn, boolean preCommandRun) {}
+	private static final class AffectedContainer {
+		private RestoreFunction restoreFn;
+		private final boolean preCommandRun;
+		private boolean stateRestored;
+		private AffectedContainer(RestoreFunction restoreFn, boolean preCommandRun) {
+			this.restoreFn = restoreFn;
+			this.preCommandRun = preCommandRun;
+		}
+	}
 	
 	/**
 	 * This interface is responsible for restoring the state of a container after a backup.
